@@ -15,6 +15,48 @@
     return true;
   }
 
+  // ---- Shared passphrase (anti-abuse for shared link) ----
+  const PASS_KEY = 'readpaper.pass.v1';
+  function getPass() {
+    try { return localStorage.getItem(PASS_KEY) || ''; } catch { return ''; }
+  }
+  function setPass(v) {
+    try {
+      if (v) localStorage.setItem(PASS_KEY, v);
+      else localStorage.removeItem(PASS_KEY);
+    } catch {}
+  }
+  function ensurePass(force) {
+    let p = force ? '' : getPass();
+    if (!p) {
+      p = (window.prompt('请输入访问口令（向作者索要）') || '').trim();
+      if (p) setPass(p);
+    }
+    return p;
+  }
+  function authHeaders(extra) {
+    const p = getPass();
+    const h = Object.assign({}, extra || {});
+    if (p) h['x-readpaper-pass'] = p;
+    return h;
+  }
+  // Wrapper: prompt on first call, retry once on 401.
+  async function workerFetch(path, init) {
+    if (!ensurePass(false)) throw new Error('需要访问口令');
+    let resp = await fetch(`${WORKER_URL}${path}`, Object.assign({}, init, {
+      headers: authHeaders((init && init.headers) || {}),
+    }));
+    if (resp.status === 401) {
+      setPass('');
+      alert('访问口令不正确，请重新输入');
+      if (!ensurePass(true)) throw new Error('需要访问口令');
+      resp = await fetch(`${WORKER_URL}${path}`, Object.assign({}, init, {
+        headers: authHeaders((init && init.headers) || {}),
+      }));
+    }
+    return resp;
+  }
+
   // ---- Browser-side library (localStorage) ----
   // Schema: { [id]: { id, title, authors, createdAt, updatedAt, history: [{role,content,ts}] } }
   const LIB_KEY = 'readpaper.library.v1';
@@ -207,8 +249,9 @@
       }
     } else {
       if (!ensureConfigured()) return;
+      if (!ensurePass(false)) return;
       // arXiv metadata via Worker (non-blocking display)
-      fetch(`${WORKER_URL}/arxiv/${encodeURIComponent(id)}/meta`)
+      workerFetch(`/arxiv/${encodeURIComponent(id)}/meta`)
         .then(r => r.json())
         .then(meta => {
           if (meta && meta.title) {
@@ -219,7 +262,11 @@
           libUpsert(id, meta && meta.title || '', meta && meta.authors || []);
         })
         .catch(() => { libUpsert(id, '', []); });
-      pdfSource = { url: `${WORKER_URL}/arxiv/${encodeURIComponent(id)}.pdf` };
+      pdfSource = {
+        url: `${WORKER_URL}/arxiv/${encodeURIComponent(id)}.pdf`,
+        httpHeaders: { 'x-readpaper-pass': getPass() },
+        withCredentials: false,
+      };
     }
 
     // Fetch + render
@@ -460,7 +507,8 @@
     };
     try {
       if (!ensureConfigured()) throw new Error('未配置 Worker URL');
-      const resp = await fetch(`${WORKER_URL}/chat`, {
+      if (!ensurePass(false)) throw new Error('需要访问口令');
+      const resp = await workerFetch(`/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
