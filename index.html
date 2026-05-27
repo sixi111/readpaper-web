@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>readpaper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+<!-- PDF.js 3.x (UMD build) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Markdown rendering + sanitizer -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<!-- Code highlighting (optional but pretty) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<!-- Math (KaTeX) for inline/display formulas -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">§</span>
+      <span class="brand-name">readpaper</span>
+    </div>
+    <form id="loadForm" class="loader">
+      <span class="loader-icon" aria-hidden="true">⌕</span>
+      <input id="arxivInput" type="text"
+             placeholder="粘贴 arXiv 链接或 ID，例如 2310.06825"
+             autocomplete="off" spellcheck="false" />
+      <button type="submit">加载</button>
+    </form>
+    <input id="uploadInput" type="file" accept="application/pdf" hidden />
+    <button id="uploadBtn" class="library-btn" type="button" aria-label="上传 PDF" title="上传本地 PDF">
+      <span class="library-icon">⇪</span>
+      <span>上传</span>
+    </button>
+    <div id="paperMeta" class="paper-meta"></div>
+    <button id="libraryBtn" class="library-btn" type="button" aria-label="打开记忆库">
+      <span class="library-icon">❒</span>
+      <span>记忆库</span>
+    </button>
+  </header>
+
+  <!-- Library drawer -->
+  <div id="libraryOverlay" class="lib-overlay hidden"></div>
+  <aside id="libraryDrawer" class="lib-drawer hidden" aria-hidden="true">
+    <div class="lib-head">
+      <span class="lib-title">记忆库</span>
+      <button id="libraryClose" class="link-btn" type="button" aria-label="关闭">✕</button>
+    </div>
+    <div class="lib-sub">已读论文与对话历史</div>
+    <div id="libraryList" class="lib-list"></div>
+  </aside>
+
+  <main class="main">
+    <section id="leftPane" class="left-pane">
+      <div class="pdf-toolbar" id="pdfToolbar" hidden>
+        <div class="zoom-group">
+          <button type="button" id="zoomOut" title="缩小" aria-label="缩小">−</button>
+          <span id="zoomLevel" class="zoom-level">100%</span>
+          <button type="button" id="zoomIn" title="放大" aria-label="放大">+</button>
+        </div>
+        <button type="button" id="zoomReset" class="reset-btn" title="重置缩放">重置</button>
+      </div>
+      <div id="dropHint" class="drop-hint hidden">松开以上传 PDF</div>
+      <div id="pdfContainer" class="pdf-container">
+        <div class="empty-state">
+          <div class="empty-icon">📄</div>
+          <div class="empty-title">还没有加载论文</div>
+          <div class="empty-desc">在上方输入 arXiv ID/链接，或点击「上传」<br>也可直接把 PDF 拖到这里</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="divider" id="divider"></div>
+
+    <section class="right-pane">
+      <div class="chat-header">
+        <span class="chat-title">提问</span>
+        <div class="chat-header-actions">
+          <label class="vision-toggle" title="把每页 PDF 渲染图发给 Claude，可识别图表与公式（消耗较多 token）">
+            <input type="checkbox" id="visionToggle" checked />
+            <span>看图</span>
+          </label>
+          <button id="clearChat" class="link-btn" type="button">清空对话</button>
+        </div>
+      </div>
+      <div id="chatLog" class="chat-log">
+        <div class="empty-chat">
+          <div class="empty-chat-icon">💬</div>
+          <div>左侧划词后可作为引用，或直接提问</div>
+        </div>
+      </div>
+      <div id="quoteBox" class="quote-box hidden">
+        <div class="quote-label">引用</div>
+        <div id="quoteText" class="quote-text"></div>
+        <button id="quoteRemove" class="quote-remove" type="button" aria-label="删除引用">×</button>
+      </div>
+      <form id="chatForm" class="chat-form">
+        <textarea id="chatInput" rows="3"
+          placeholder="向 Claude 提问  ·  Cmd/Ctrl + Enter 发送"></textarea>
+        <div class="chat-form-foot">
+          <span class="hint-text">划词后会自动作为引用插入</span>
+          <button type="submit" id="sendBtn">
+            <span>发送</span>
+            <span class="kbd">⌘↵</span>
+          </button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
