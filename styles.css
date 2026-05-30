@@ -300,6 +300,14 @@ button { font-family: inherit; }
   color: var(--warm);
   background: var(--warm-soft);
 }
+.lib-foot {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  background: var(--panel-soft);
+}
 
 /* ---------- Main split ---------- */
 .main {

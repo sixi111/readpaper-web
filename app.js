@@ -185,6 +185,70 @@
   const uploadBtn = $('uploadBtn');
   const uploadInput = $('uploadInput');
   const dropHint = $('dropHint');
+  const faviconBtn = $('faviconBtn');
+  const faviconInput = $('faviconInput');
+  const faviconReset = $('faviconReset');
+  const faviconLink = $('faviconLink');
+
+  // ---- Tab title + favicon ----
+  const FAVICON_KEY = 'readpaper.favicon.v1';
+  const DEFAULT_TITLE = 'readpaper';
+  function setTabTitle(name) {
+    document.title = name ? `${name} — ${DEFAULT_TITLE}` : DEFAULT_TITLE;
+  }
+  function applyStoredFavicon() {
+    if (!faviconLink) return;
+    try {
+      const v = localStorage.getItem(FAVICON_KEY);
+      if (v) faviconLink.href = v;
+    } catch {}
+  }
+  function setFaviconFromFile(file) {
+    if (!file || !faviconLink) return;
+    if (!/^image\//.test(file.type)) { alert('请选 PNG/JPG/SVG 等图片文件'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      // Re-encode raster images at small size to keep localStorage healthy.
+      if (file.type === 'image/svg+xml') {
+        try { localStorage.setItem(FAVICON_KEY, dataUrl); } catch (e) { alert('保存失败：' + e.message); return; }
+        faviconLink.href = dataUrl;
+      } else {
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement('canvas');
+          const SZ = 64;
+          c.width = SZ; c.height = SZ;
+          const cx = c.getContext('2d');
+          cx.imageSmoothingQuality = 'high';
+          // letterbox: cover keeping aspect
+          const r = Math.max(SZ / img.width, SZ / img.height);
+          const w = img.width * r, h = img.height * r;
+          cx.drawImage(img, (SZ - w) / 2, (SZ - h) / 2, w, h);
+          const out = c.toDataURL('image/png');
+          try { localStorage.setItem(FAVICON_KEY, out); } catch (e) { alert('保存失败：' + e.message); return; }
+          faviconLink.href = out;
+        };
+        img.onerror = () => alert('图片解析失败');
+        img.src = dataUrl;
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+  function resetFavicon() {
+    try { localStorage.removeItem(FAVICON_KEY); } catch {}
+    if (faviconLink) faviconLink.href = 'favicon.svg';
+  }
+  applyStoredFavicon();
+  if (faviconBtn && faviconInput) {
+    faviconBtn.addEventListener('click', () => faviconInput.click());
+    faviconInput.addEventListener('change', () => {
+      const f = faviconInput.files && faviconInput.files[0];
+      faviconInput.value = '';
+      if (f) setFaviconFromFile(f);
+    });
+  }
+  if (faviconReset) faviconReset.addEventListener('click', resetFavicon);
 
   // ---- State ----
   const state = {
@@ -230,6 +294,7 @@
     state.history = [];
     chatLog.innerHTML = '<div class="empty-chat"><div class="empty-chat-icon">💬</div><div>左侧划词后可作为引用，或直接提问</div></div>';
     paperMeta.textContent = '加载中…';
+    setTabTitle('');
     pdfContainer.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">正在加载 PDF</div><div class="empty-desc">' + (isUpload ? '从本地读取' : '通过 Worker 代理拉取 arXiv') + '，请稍候</div></div>';
 
     let pdfSource;
@@ -238,6 +303,7 @@
       state.paperTitle = title;
       paperMeta.textContent = title;
       paperMeta.title = title;
+      setTabTitle(title);
       libUpsert(id, title, []);
       try {
         const blob = await idbGet(id);
@@ -250,6 +316,14 @@
     } else {
       if (!ensureConfigured()) return;
       if (!ensurePass(false)) return;
+      // Show cached title immediately (avoids the "arxiv id" flash)
+      const cached = libGet(id);
+      if (cached && cached.title) {
+        state.paperTitle = cached.title;
+        paperMeta.textContent = cached.title + ((cached.authors || []).length ? ' — ' + cached.authors.slice(0, 3).join(', ') : '');
+        paperMeta.title = cached.title + ((cached.authors || []).length ? '\n' + cached.authors.join(', ') : '');
+        setTabTitle(cached.title);
+      }
       // arXiv metadata via Worker (non-blocking display)
       workerFetch(`/arxiv/${encodeURIComponent(id)}/meta`)
         .then(r => r.json())
@@ -258,6 +332,7 @@
             state.paperTitle = meta.title;
             paperMeta.textContent = meta.title + (meta.authors?.length ? ' — ' + meta.authors.slice(0, 3).join(', ') : '');
             paperMeta.title = meta.title + (meta.authors?.length ? '\n' + meta.authors.join(', ') : '');
+            setTabTitle(meta.title);
           }
           libUpsert(id, meta && meta.title || '', meta && meta.authors || []);
         })
@@ -298,6 +373,8 @@
     wrapper.className = 'pdf-page-wrapper';
     wrapper.dataset.baseW = viewport.width;
     wrapper.dataset.baseH = viewport.height;
+    // Stash the page object so we can re-render at higher resolution on zoom
+    wrapper._pdfPage = page;
 
     const pageDiv = document.createElement('div');
     pageDiv.className = 'pdf-page';
@@ -317,6 +394,8 @@
     textLayerDiv.className = 'textLayer';
     textLayerDiv.style.width = viewport.width + 'px';
     textLayerDiv.style.height = viewport.height + 'px';
+    // Required by pdf.js text layer to size spans correctly
+    textLayerDiv.style.setProperty('--scale-factor', String(state.baseScale));
     pageDiv.appendChild(textLayerDiv);
 
     wrapper.appendChild(pageDiv);
@@ -340,6 +419,48 @@
 
     // Concatenate page text for context
     return textContent.items.map(it => it.str).join(' ');
+  }
+
+  // Re-rasterize a single page at the current zoom * baseScale so it stays sharp.
+  // Strategy: render canvas at the higher-resolution viewport, but keep its CSS size
+  // at the base size so the outer `transform: scale(zoom)` still puts it at the right
+  // visual size. Net effect: more pixels packed into the same on-screen area.
+  async function reRenderPageAtZoom(wrapper) {
+    const page = wrapper._pdfPage;
+    if (!page) return;
+    const targetScale = state.baseScale * state.zoom;
+    if (Math.abs((wrapper._renderedScale || 0) - targetScale) < 0.001) return;
+    wrapper._renderedScale = targetScale;
+    const baseW = parseFloat(wrapper.dataset.baseW);
+    const baseH = parseFloat(wrapper.dataset.baseH);
+    const pageDiv = wrapper.firstElementChild;
+    if (!pageDiv) return;
+    const canvas = pageDiv.querySelector('canvas');
+    if (!canvas) return;
+    const ratio = window.devicePixelRatio || 1;
+    const hiViewport = page.getViewport({ scale: targetScale });
+    canvas.width = Math.floor(hiViewport.width * ratio);
+    canvas.height = Math.floor(hiViewport.height * ratio);
+    canvas.style.width = baseW + 'px';
+    canvas.style.height = baseH + 'px';
+    const ctx = canvas.getContext('2d');
+    try {
+      await page.render({
+        canvasContext: ctx,
+        viewport: hiViewport,
+        transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+      }).promise;
+    } catch (_) { /* aborted re-renders are normal */ }
+  }
+  let pendingRerender = null;
+  function scheduleRerender() {
+    if (pendingRerender) clearTimeout(pendingRerender);
+    pendingRerender = setTimeout(() => {
+      pendingRerender = null;
+      document.querySelectorAll('.pdf-page-wrapper').forEach((w) => {
+        reRenderPageAtZoom(w).catch(() => {});
+      });
+    }, 220);
   }
 
   // ---- Capture page as JPEG for Claude vision ----
@@ -383,18 +504,18 @@
 
   function renderMarkdownInto(el, raw) {
     if (!window.marked) { el.textContent = raw; return; }
-    // Protect $...$ and $$...$$ from marked's parser by replacing with placeholders,
-    // then restoring before KaTeX processes them.
+    // Protect math blocks ($$..$$, \[..\], $..$, \(..\)) from marked's parser by
+    // replacing with placeholders, then rendering with KaTeX after marked runs.
     const mathBlocks = [];
+    const protect = (display, body) => {
+      mathBlocks.push({ display, body });
+      return `\u0000MATHBLOCK${mathBlocks.length - 1}\u0000`;
+    };
     const protectedRaw = raw
-      .replace(/\$\$([\s\S]+?)\$\$/g, (_m, body) => {
-        mathBlocks.push({ display: true, body });
-        return `\u0000MATHBLOCK${mathBlocks.length - 1}\u0000`;
-      })
-      .replace(/(?<!\\)\$([^\n$]+?)(?<!\\)\$/g, (_m, body) => {
-        mathBlocks.push({ display: false, body });
-        return `\u0000MATHBLOCK${mathBlocks.length - 1}\u0000`;
-      });
+      .replace(/\$\$([\s\S]+?)\$\$/g, (_m, body) => protect(true, body))
+      .replace(/\\\[([\s\S]+?)\\\]/g, (_m, body) => protect(true, body))
+      .replace(/(?<!\\)\$([^\n$]+?)(?<!\\)\$/g, (_m, body) => protect(false, body))
+      .replace(/\\\(([\s\S]+?)\\\)/g, (_m, body) => protect(false, body));
     let html = marked.parse(protectedRaw);
     html = html.replace(/\u0000MATHBLOCK(\d+)\u0000/g, (_m, i) => {
       const m = mathBlocks[+i];
@@ -617,6 +738,7 @@
   function setZoom(z) {
     state.zoom = Math.max(0.4, Math.min(3.0, z));
     applyZoom();
+    scheduleRerender();
   }
   zoomInBtn.addEventListener('click', () => setZoom(state.zoom * 1.15));
   zoomOutBtn.addEventListener('click', () => setZoom(state.zoom / 1.15));
@@ -784,6 +906,26 @@
         refreshLibraryList();
       });
       libraryList.appendChild(card);
+    });
+    // Lazy-fill missing titles for arXiv entries (no-op for upload-* IDs).
+    items.forEach((it) => {
+      if (it.title) return;
+      if (/^upload-/i.test(it.id)) return;
+      if (!WORKER_URL || !getPass()) return;
+      workerFetch(`/arxiv/${encodeURIComponent(it.id)}/meta`)
+        .then(r => r.ok ? r.json() : null)
+        .then(meta => {
+          if (!meta || !meta.title) return;
+          libUpsert(it.id, meta.title, meta.authors || []);
+          const card = libraryList.querySelector(`.lib-card[data-id="${CSS.escape(it.id)}"]`);
+          if (!card) return;
+          const t = card.querySelector('.lib-card-title');
+          if (t) t.textContent = meta.title;
+          const meta2 = card.querySelector('.lib-card-meta span');
+          if (meta2 && meta.authors && meta.authors.length) {
+            meta2.textContent = meta.authors.slice(0, 2).join(', ');
+          }
+        }).catch(() => {});
     });
   }
 

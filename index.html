@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
 <title>readpaper</title>
+<link id="faviconLink" rel="icon" type="image/svg+xml" href="favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -56,6 +57,11 @@
     </div>
     <div class="lib-sub">已读论文与对话历史</div>
     <div id="libraryList" class="lib-list"></div>
+    <div class="lib-foot">
+      <input id="faviconInput" type="file" accept="image/*" hidden />
+      <button id="faviconBtn" class="link-btn" type="button" title="上传一张图片作为浏览器标签图标">换标签页图标</button>
+      <button id="faviconReset" class="link-btn" type="button" title="恢复默认图标">恢复默认</button>
+    </div>
   </aside>
 
   <main class="main">
